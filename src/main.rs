@@ -157,37 +157,6 @@ fn main() -> Result<(), WdError> {
         }
     }
 
-    // Second pass - spider downwards
-    let mut todo_crates = emb_index
-        .iter()
-        .map(|sr| sr.to_string())
-        .collect::<Vec<String>>();
-
-    while let Some(cr) = todo_crates.pop() {
-        for (_ver, cr_info) in index.crates.get(&cr).unwrap().iter() {
-            for dep in cr_info.deps.iter() {
-                if let Some(ref kind) = dep.kind {
-                    if kind != &Kind::Normal {
-                        continue;
-                    }
-                }
-
-
-                let name = if let Some(pkg) = &dep.package {
-                    pkg.clone()
-                } else {
-                    dep.name.clone()
-                };
-
-                if !emb_index.contains(&name) {
-                    maybe_respider.insert(name.clone());
-                }
-
-                emb_index.insert(name);
-            }
-        }
-    }
-
     let mut idx_sz = 0;
 
     while idx_sz != emb_index.len() {
