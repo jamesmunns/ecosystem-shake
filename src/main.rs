@@ -9,7 +9,7 @@ use serde_json;
 use walkdir::{WalkDir, Error as WdError};
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum Kind {
     Normal,
@@ -96,6 +96,12 @@ fn main() -> Result<(), WdError> {
         for (_vers, cr_data) in cr_vers {
             for dep in cr_data.deps.iter() {
 
+                if let Some(ref kind) = dep.kind {
+                    if kind != &Kind::Normal {
+                        continue;
+                    }
+                }
+
                 let name = if let Some(pkg) = &dep.package {
                     pkg.clone()
                 } else {
@@ -130,7 +136,7 @@ fn main() -> Result<(), WdError> {
         .collect::<Vec<String>>();
 
     let mut emb_index: HashSet<String> = HashSet::new();
-    let mut maybe_emb: HashSet<String> = HashSet::new();
+    let mut maybe_respider: HashSet<String> = HashSet::new();
 
     // First pass - spider upwards
     while let Some(cr) = todo_crates.pop() {
@@ -149,10 +155,86 @@ fn main() -> Result<(), WdError> {
         } else {
             println!("{} has no rdeps?!?!", cr);
         }
+    }
+
+    // Second pass - spider downwards
+    let mut todo_crates = emb_index
+        .iter()
+        .map(|sr| sr.to_string())
+        .collect::<Vec<String>>();
+
+    while let Some(cr) = todo_crates.pop() {
+        for (_ver, cr_info) in index.crates.get(&cr).unwrap().iter() {
+            for dep in cr_info.deps.iter() {
+                if let Some(ref kind) = dep.kind {
+                    if kind != &Kind::Normal {
+                        continue;
+                    }
+                }
+
+
+                let name = if let Some(pkg) = &dep.package {
+                    pkg.clone()
+                } else {
+                    dep.name.clone()
+                };
+
+                if !emb_index.contains(&name) {
+                    maybe_respider.insert(name.clone());
+                }
+
+                emb_index.insert(name);
+            }
+        }
+    }
+
+    let mut idx_sz = 0;
+
+    while idx_sz != emb_index.len() {
+        idx_sz = emb_index.len();
+
+        // Second pass - spider downwards
+        let mut todo_crates = emb_index
+            .iter()
+            .map(|sr| sr.to_string())
+            .collect::<Vec<String>>();
+
+        while let Some(cr) = todo_crates.pop() {
+            for (_ver, cr_info) in index.crates.get(&cr).unwrap().iter() {
+                for dep in cr_info.deps.iter() {
+                    if let Some(ref kind) = dep.kind {
+                        if kind != &Kind::Normal {
+                            continue;
+                        }
+                    }
+
+
+                    let name = if let Some(pkg) = &dep.package {
+                        pkg.clone()
+                    } else {
+                        dep.name.clone()
+                    };
+
+                    if !emb_index.contains(&name) {
+                        maybe_respider.insert(name.clone());
+                    }
+
+                    emb_index.insert(name);
+                }
+            }
+        }
+
+        for cr in emb_index.iter() {
+            let _ = maybe_respider.remove(cr);
+        }
+
 
     }
 
-    println!("{:#?}", emb_index);
+
+    println!("emb_index = {:#?}", emb_index);
+    println!("maybe_respider = {:#?}", maybe_respider);
+    println!("emb_index.len() = {}", emb_index.len());
 
     Ok(())
 
