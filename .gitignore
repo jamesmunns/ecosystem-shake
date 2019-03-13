@@ -1,2 +1,7 @@
 /target
 **/*.rs.bk
+index.json
+*.log
+*.tar
+*.gz
+
