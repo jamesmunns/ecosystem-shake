@@ -4,10 +4,9 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use mvdb::Mvdb;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_json;
-use walkdir::{WalkDir, Error as WdError};
-
+use walkdir::{Error as WdError, WalkDir};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -40,17 +39,13 @@ struct Krate {
     // links: Option<String>
 }
 
-
-
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct Database {
     crates: HashMap<String, HashMap<String, Krate>>,
     reverse_deps: HashMap<String, HashSet<String>>,
 }
 
-
 fn main() -> Result<(), WdError> {
-
     let mut index = Database::default();
 
     println!("Building forward deps tree...");
@@ -63,7 +58,7 @@ fn main() -> Result<(), WdError> {
         let path = entry.as_ref().unwrap().path();
 
         if (&format!("{}", path.display())).ends_with(".json") {
-            continue
+            continue;
         }
         let file = File::open(path).unwrap();
         for line in BufReader::new(file).lines() {
@@ -91,11 +86,9 @@ fn main() -> Result<(), WdError> {
         .collect();
 
     for (cr_ident, cr_vers) in index.crates.iter() {
-
         // TODO: store each version independently?
         for (_vers, cr_data) in cr_vers {
             for dep in cr_data.deps.iter() {
-
                 if let Some(ref kind) = dep.kind {
                     if kind != &Kind::Normal {
                         continue;
@@ -113,10 +106,7 @@ fn main() -> Result<(), WdError> {
                     rindex.insert(name.clone(), HashSet::new());
                 }
 
-                rindex
-                    .get_mut(&name)
-                    .unwrap()
-                    .insert(cr_ident.clone());
+                rindex.get_mut(&name).unwrap().insert(cr_ident.clone());
             }
         }
     }
@@ -130,6 +120,7 @@ fn main() -> Result<(), WdError> {
     println!("Building embedded tree...");
 
     let seed_crates = ["cortex-m"];
+
     let mut todo_crates = seed_crates
         .iter()
         .map(|sr| sr.to_string())
@@ -177,7 +168,6 @@ fn main() -> Result<(), WdError> {
                         }
                     }
 
-
                     let name = if let Some(pkg) = &dep.package {
                         pkg.clone()
                     } else {
@@ -196,15 +186,192 @@ fn main() -> Result<(), WdError> {
         for cr in emb_index.iter() {
             let _ = maybe_respider.remove(cr);
         }
-
-
     }
-
 
     println!("emb_index = {:#?}", emb_index);
     println!("maybe_respider = {:#?}", maybe_respider);
     println!("emb_index.len() = {}", emb_index.len());
 
-    Ok(())
+    book(&emb_index, &index);
 
+    Ok(())
+}
+
+// Top index
+// Index by reverse deps
+// Index by downloads
+// Index alphabetically
+// All crates
+// ...
+
+fn book(crates: &HashSet<String>, idx: &Database) {
+    // sort by most reverse_deps
+    let mut by_rdeps: Vec<(usize, String)> = crates
+        .iter()
+        .map(|cr| {
+            let ct = idx
+                .reverse_deps
+                .get(cr)
+                .unwrap()
+                .iter()
+                .fold(0, |acc, dep| {
+                    // Only count reverse deps if they are in the ecosystem
+                    if crates.contains(dep) {
+                        acc + 1
+                    } else {
+                        acc
+                    }
+                });
+            (ct, cr.to_string())
+        })
+        .collect();
+
+    // Sort largest first
+    by_rdeps.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+
+    println!("{:?}", by_rdeps);
+
+    // create a file for each crate
+    std::fs::create_dir_all("book/src/crates").unwrap();
+
+    use std::io::prelude::*;
+
+    let fprint = |f: &mut File, strng: String| {
+        f.write_all(strng.as_bytes()).unwrap();
+    };
+
+    for (_ct, cr) in by_rdeps.iter() {
+        let mut file = File::create(&format!("book/src/crates/{}.md", cr)).unwrap();
+        fprint(&mut file, format!("# `{}`\n", cr));
+
+        fprint(&mut file, format!("\nDescription!\n"));
+
+        fprint(&mut file, format!("\n**See more info on [crates.io](https://crates.io/crates/{})**\n", cr));
+
+        fprint(&mut file, format!("\n## Dependencies\n\n"));
+        let mut all_deps = HashSet::new();
+        for (_ver, cr) in idx.crates.get(cr).unwrap().iter() {
+            for dep in cr.deps.iter() {
+                if let Some(ref kind) = dep.kind {
+                    if kind != &Kind::Normal {
+                        continue;
+                    }
+                }
+
+                let name = if let Some(pkg) = &dep.package {
+                    pkg.clone()
+                } else {
+                    dep.name.clone()
+                };
+
+                all_deps.insert(name);
+            }
+        }
+
+        let mut all_deps = all_deps.iter().collect::<Vec<_>>();
+        all_deps.sort_unstable();
+
+        for dep in all_deps {
+            fprint(&mut file, format!("* [`{0}`](./{0}.md)\n", dep));
+        }
+
+        fprint(&mut file, format!("\n## Embedded Rust Reverse Dependencies\n\n"));
+
+        let mut all_rdeps = idx.reverse_deps.get(cr).unwrap().iter().collect::<Vec<_>>();
+        all_rdeps.sort_unstable();
+
+        for rdep in all_rdeps {
+            if !crates.contains(rdep) {
+                continue;
+            }
+            fprint(&mut file, format!("* [`{0}`](./{0}.md)\n", rdep));
+        }
+
+        fprint(&mut file, format!("\n## Non Embedded Rust Reverse Dependencies\n\n"));
+
+        let mut all_rdeps = idx.reverse_deps.get(cr).unwrap().iter().collect::<Vec<_>>();
+        all_rdeps.sort_unstable();
+
+        for rdep in all_rdeps {
+            if crates.contains(rdep) {
+                continue;
+            }
+            fprint(&mut file, format!("* [`{0}`](./{0}.md)\n", rdep));
+        }
+
+        // TODO: List all versions
+        // TODO:
+    }
+
+    {
+        let mut file = File::create("book/src/rdep-index.md").unwrap();
+
+        fprint(&mut file, "# The Embedded Rust Ecosystem\n\n".into());
+        fprint(&mut file, "Sorted by Embedded Rust reverse dependencies.\n\n".into());
+
+        fprint(&mut file, "| Reverse Dependencies | Name | Description |\n".into());
+        fprint(&mut file, "| :--- | :--- | :--- |\n".into());
+
+        for (ct, cr) in by_rdeps.iter() {
+            fprint(&mut file, format!(
+                "| {0} | [`{1}`](./crates/{1}.md) | {2} |\n",
+                ct,
+                cr,
+                "TODO!",
+            ));
+        }
+    }
+
+    let mut by_alpha = crates.iter().collect::<Vec<_>>();
+    by_alpha.sort_unstable();
+
+    {
+        let mut file = File::create("book/src/alpha-index.md").unwrap();
+
+        fprint(&mut file, "# The Embedded Rust Ecosystem\n\n".into());
+        fprint(&mut file, "Sorted alphabetically.\n\n".into());
+
+        fprint(&mut file, "| Name | Description |\n".into());
+        fprint(&mut file, "| :--- | :--- |\n".into());
+
+        for cr in by_alpha.iter() {
+            fprint(&mut file, format!(
+                "| [`{0}`](./crates/{0}.md) | {1} |\n",
+                cr,
+                "TODO!",
+            ));
+        }
+    }
+
+    {
+        let mut file = File::create("book/src/SUMMARY.md").unwrap();
+
+        fprint(&mut file, "# The Embedded Rust Ecosystem\n\n".into());
+
+        fprint(&mut file, "- [Alphabetically](./alpha-index.md)\n".into());
+        fprint(&mut file, "- [By Reverse Dependencies](./rdep-index.md)\n".into());
+        fprint(&mut file, "- [All Crates](./crates.md)\n".into());
+
+        for cr in by_alpha.iter() {
+            fprint(&mut file, format!(
+                "    - [`{0}`](./crates/{0}.md)\n",
+                cr,
+            ));
+        }
+    }
+
+
+    // List versions
+
+    // List deps
+
+    // List reverse deps
+
+    // Readme contents
+
+    // crate index pages
+
+    // Alpha
+    // reverse_deps
+    // downloads
 }
